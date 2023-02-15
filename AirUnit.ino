@@ -100,38 +100,52 @@ int Consumtion;
 int RSSI;
 bool arm;
 
+static void prepareData(){
+  Latitude = 51.61894;
+  Longitude = 3.88000;
+  GroundSpeed = 40;
+  Altitude = 25;
+  Satilites = 7;
+  SatFix = true;
+  Pitch = 4;
+  Roll = 20;
+  Heading = 50;
+  Vbatt = 380;
+  Consumtion = 250;
+  RSSI = 60;
+  arm = true;
+}
 
 
-static void prepareTxFrame( uint8_t port )
-{
-    appDataSize = 4;//AppDataSize max value is 64
-    appData[0] = Latitude[0];
-    appData[1] = Latitude[1];
-    appData[2] = Latitude[3];
-    appData[3] = Latitude[4];
+static void prepareTxFrame( uint8_t port ){
+  appDataSize = 22; //AppDataSize max value is 64
+  appData[0] = Latitude[0];
+  appData[1] = Latitude[1];
+  appData[2] = Latitude[3];
+  appData[3] = Latitude[4];
 
-    appData[4] = Longitude[0];
-    appData[5] = Longitude[1];
-    appData[6] = Longitude[3];
-    appData[7] = Longitude[4];
+  appData[4] = Longitude[0];
+  appData[5] = Longitude[1];
+  appData[6] = Longitude[3];
+  appData[7] = Longitude[4];
 
-    appData[8] = Altitude[0];
-    appData[9] = Altitude[1];
-    appData[10] = Altitude[3];
-    appData[11] = Altitude[4];
+  appData[8] = Altitude[0];
+  appData[9] = Altitude[1];
+  appData[10] = Altitude[3];
+  appData[11] = Altitude[4];
 
-    appData[12] = (byte)GroundSpeed;
-    appData[13] = (byte)Satilites;
-    appData[14] = (byte) SatFix;
-    appData[15] = (byte) Pitch;
+  appData[12] = (byte)GroundSpeed;
+  appData[13] = (byte)Satilites;
+  appData[14] = (byte) SatFix;
+  appData[15] = (byte) Pitch;
 
-    appData[16] = (byte) Roll;
-    appData[17] = (byte) Heading;
-    appData[18] = (byte) Vbatt;
-    appData[19] = (byte) Consumtion;
+  appData[16] = (byte) Roll;
+  appData[17] = (byte) Heading;
+  appData[18] = (byte) Vbatt;
+  appData[19] = (byte) Consumtion;
 
-    appData[20] = (byte) RSSI;
-    appData[21] = (byte) arm;
+  appData[20] = (byte) RSSI;
+  appData[21] = (byte) arm;
 }
 
 // Add your initialization code here
