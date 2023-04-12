@@ -9,15 +9,10 @@
 
 int packetCounter = 0;
 
-union floatAsBytes{
-  float thefloat;
-  byte theBytes[4];
-};
-
 struct TelemetryData {
-  floatAsBytes latitude;
-  floatAsBytes longitude;
-  floatAsBytes vbatt;
+  float latitude;
+  float longitude;
+  float vbatt;
   uint8_t altitude;
   uint8_t ground_speed;
   uint8_t satellites;
@@ -50,42 +45,30 @@ void setup() {
   delay(1500);
 }
 
-void sendPacket(TelemetryData telemetry){
+void sendPacket(TelemetryData telemetry) {
   LoRa.beginPacket();
   LoRa.write(DEST_ADDRESS);
-  LoRa.write(telemetry.latitude.theBytes[0]);
-  LoRa.write(telemetry.latitude.theBytes[1]);
-  LoRa.write(telemetry.latitude.theBytes[2]);
-  LoRa.write(telemetry.latitude.theBytes[3]);
-
-  LoRa.write(telemetry.longitude.theBytes[0]);
-  LoRa.write(telemetry.longitude.theBytes[1]);
-  LoRa.write(telemetry.longitude.theBytes[2]);
-  LoRa.write(telemetry.longitude.theBytes[3]);
-
-  LoRa.write(telemetry.vbatt.theBytes[0]);
-  LoRa.write(telemetry.vbatt.theBytes[1]);
-  LoRa.write(telemetry.vbatt.theBytes[2]);
-  LoRa.write(telemetry.vbatt.theBytes[3]);
-
-  LoRa.write(telemetry.altitude);
-  LoRa.write(telemetry.ground_speed);
-  LoRa.write(telemetry.satellites);
-  LoRa.write(telemetry.consumption);
-  LoRa.write(telemetry.rssi);
-  LoRa.write(telemetry.pitch);
-  LoRa.write(telemetry.roll);
-  LoRa.write(telemetry.heading);
-  LoRa.write(telemetry.arm);
-  LoRa.write(telemetry.sat_fix);
+  LoRa.print(String(telemetry.latitude, 4));
+  LoRa.print("," + String(telemetry.longitude, 4));
+  LoRa.print("," + String(telemetry.vbatt));
+  LoRa.print("," + String(telemetry.altitude));
+  LoRa.print("," + String(telemetry.ground_speed));
+  LoRa.print("," + String(telemetry.satellites));
+  LoRa.print("," + String(telemetry.consumption));
+  LoRa.print("," + String(telemetry.rssi));
+  LoRa.print("," + String(telemetry.pitch));
+  LoRa.print("," + String(telemetry.roll));
+  LoRa.print("," + String(telemetry.heading));
+  LoRa.print("," + String(telemetry.arm ? 1 : 0));
+  LoRa.print(telemetry.sat_fix ? 1 : 0);
   LoRa.endPacket();
 }
 
 TelemetryData getTelemetry(){
   TelemetryData telemetry;
-  telemetry.latitude.thefloat = 37.7749;
-  telemetry.longitude.thefloat = -122.4194;
-  telemetry.vbatt.thefloat = 9.0;
+  telemetry.latitude = 37.7749;
+  telemetry.longitude = -122.4194;
+  telemetry.vbatt = 9.0;
   telemetry.altitude = 200;
   telemetry.ground_speed = 50;
   telemetry.satellites = 8;
