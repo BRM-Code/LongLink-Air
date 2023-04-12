@@ -3,6 +3,8 @@
 // Set LoRa frequency and spreading factor
 #define BAND    868E6
 #define SF      9
+#define CR      8
+#define UAV_ID  "u1"
 
 // Set the destination address for the packet (the address of the ground station)
 #define DEST_ADDRESS 0x0016c001ff15eb23
@@ -29,6 +31,8 @@ void setup() {
   // Setup LoRa module
   Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.Heltec.Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
   LoRa.setSpreadingFactor(SF);
+  LoRa.setCodingRate4(CR);
+
 
   // Setup serial communication
   Serial.begin(115200);
@@ -61,6 +65,7 @@ void sendPacket(TelemetryData telemetry) {
   LoRa.print("," + String(telemetry.heading));
   LoRa.print("," + String(telemetry.arm ? 1 : 0));
   LoRa.print(telemetry.sat_fix ? 1 : 0);
+  LoRa.print("," + String(UAV_ID));
   LoRa.endPacket();
 }
 
