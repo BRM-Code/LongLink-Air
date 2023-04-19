@@ -1,15 +1,25 @@
 #include "heltec.h"
+#include <Crypto.h>
+#include <AESLib.h>
 
-// Set LoRa frequency and spreading factor
-#define BAND    868E6
-#define SF      9
-#define CR      8
-#define UAV_ID  "u1"
+#define BAND    868E6 //Lora band frequency
+#define SF      7     //Spreading factor
+#define CR      4    //Coding rate
+uint64_t DEST_ADDRESS = 0x0016c001ff15eb23; // Set the destination address for the packet (the address of the ground station)
+byte key[16]={0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
+char UAV_ID[] = "u1"; //Iroha blockchain ID
+byte data[53];
+byte SendPacketCounter = 0;
+byte ReceivePacketCounter = 1;
+byte lastReceivePacketCounter = 0;
+long lastSendTime = 0;
+boolean send = false;
 
-// Set the destination address for the packet (the address of the ground station)
-#define DEST_ADDRESS 0x0016c001ff15eb23
+AESLib aesLib;
 
-int packetCounter = 0;
+byte aes_key[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6, 0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
+byte aes_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
 
 struct TelemetryData {
   float latitude;
@@ -27,12 +37,29 @@ struct TelemetryData {
   bool sat_fix;
 };
 
+
+String encrypt_impl(char * msg, byte iv[]) {
+  int msgLen = strlen(msg);
+  char encrypted[2 * msgLen] = {0};
+  aesLib.encrypt64((const byte*)msg, msgLen, encrypted, aes_key, sizeof(aes_key), iv);
+  return String(encrypted);
+}
+
+String decrypt_impl(char * msg, byte iv[]) {
+  int msgLen = strlen(msg);
+  char decrypted[msgLen] = {0}; // half may be enough
+  aesLib.decrypt64(msg, msgLen, (byte*)decrypted, aes_key, sizeof(aes_key), iv);
+  return String(decrypted);
+}
+
 void setup() {
   // Setup LoRa module
   Heltec.begin(true /*DisplayEnable Enable*/, true /*Heltec.Heltec.Heltec.LoRa Disable*/, true /*Serial Enable*/, true /*PABOOST Enable*/, BAND /*long BAND*/);
   LoRa.setSpreadingFactor(SF);
   LoRa.setCodingRate4(CR);
-
+  LoRa.setPreambleLength(8);
+  LoRa.setFrequency(867500000);
+  LoRa.enableCrc();
 
   // Setup serial communication
   Serial.begin(115200);
@@ -46,26 +73,67 @@ void setup() {
   // Display setup message
   Heltec.display->drawString(0, 0, "LongLink-Air Unit");
   Heltec.display->display();
-  delay(1500);
 }
 
 void sendPacket(TelemetryData telemetry) {
+  Serial.println("Sending Telemetry Packet!");
+  String json_data = " " + String(telemetry.latitude, 4) +
+                   " " + String(telemetry.longitude, 4) +
+                   " " + String(telemetry.vbatt) +
+                   " " + String(telemetry.altitude) +
+                   " " + String(telemetry.ground_speed) +
+                   " " + String(telemetry.satellites) +
+                   " " + String(telemetry.consumption) +
+                   " " + String(telemetry.rssi) +
+                   " " + String(telemetry.pitch) +
+                   " " + String(telemetry.roll) +
+                   " " + String(telemetry.heading) +
+                   " " + String(telemetry.arm ? 1 : 0) + String(telemetry.sat_fix ? 1 : 0);
+  Serial.print("Plaintext: ");
+  Serial.println(json_data);
+
+  aesLib.set_paddingmode(paddingMode::ZeroLength); 
+
+  // Encrypt Data
+  byte enc_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
+  String encrypted = encrypt_impl((char*)json_data.c_str(), enc_iv);
+  // sprintf(ciphertext, "%s", encrypted.c_str());
+  Serial.print("Base64 encoded Ciphertext: ");
+  Serial.println(encrypted);
+
+  // Decrypt Data
+  byte dec_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
+  String decrypted = decrypt_impl((char*)encrypted.c_str(), dec_iv);
+  Serial.print("Base64-decoded Cleartext: ");
+  Serial.println(decrypted);
+
   LoRa.beginPacket();
   LoRa.write(DEST_ADDRESS);
-  LoRa.print(String(telemetry.latitude, 4));
-  LoRa.print("," + String(telemetry.longitude, 4));
-  LoRa.print("," + String(telemetry.vbatt));
-  LoRa.print("," + String(telemetry.altitude));
-  LoRa.print("," + String(telemetry.ground_speed));
-  LoRa.print("," + String(telemetry.satellites));
-  LoRa.print("," + String(telemetry.consumption));
-  LoRa.print("," + String(telemetry.rssi));
-  LoRa.print("," + String(telemetry.pitch));
-  LoRa.print("," + String(telemetry.roll));
-  LoRa.print("," + String(telemetry.heading));
-  LoRa.print("," + String(telemetry.arm ? 1 : 0));
-  LoRa.print(telemetry.sat_fix ? 1 : 0);
-  LoRa.print("," + String(UAV_ID));
+  LoRa.print(UAV_ID);
+  LoRa.print(encrypted);
+  LoRa.endPacket();
+}
+
+void onReceive(int packetSize)
+{
+  if (packetSize == 0){
+    return;   
+  }        // if there's no packet, return
+
+  Serial.println("Receiving Packet!");
+  while (LoRa.available()) {
+    Serial.println(LoRa.read());
+  }
+  ReceivePacketCounter++;
+  sendPacketACK();
+}
+
+void sendPacketACK() {
+  Serial.println("Sending ACK Packet!");
+  LoRa.beginPacket();
+  LoRa.write(DEST_ADDRESS);
+  LoRa.write(UAV_ID[0]);
+  LoRa.write(UAV_ID[1]);
   LoRa.endPacket();
 }
 
@@ -87,15 +155,17 @@ TelemetryData getTelemetry(){
   return telemetry;
 }
 
+
 void loop() {
-  packetCounter += 1;
-
-  sendPacket(getTelemetry());
-
-  Heltec.display->clear();
-  Heltec.display->drawString(0, 0, "LongLink-Air Unit");
-  Heltec.display->drawString(0, 12, String(packetCounter));
-  Heltec.display->display();
-
-  delay(5000);
+  if (!send)
+  {
+    sendPacket(getTelemetry());
+    SendPacketCounter++;
+    lastSendTime = millis();
+    lastReceivePacketCounter = ReceivePacketCounter;
+    send = true;
+  }
+  else{
+    onReceive(LoRa.parsePacket());
+  }
 }
