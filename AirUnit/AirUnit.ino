@@ -2,18 +2,20 @@
 #include <Crypto.h>
 #include <AESLib.h>
 
-#define BAND    868E6 //Lora band frequency
-#define SF      7     //Spreading factor
-#define CR      4    //Coding rate
-uint64_t DEST_ADDRESS = 0x0016c001ff15eb23; // Set the destination address for the packet (the address of the ground station)
-byte key[16]={0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F};
-char UAV_ID[] = "u1"; //Iroha blockchain ID
-byte data[53];
+#define BAND       868E6 //Lora band frequency
+#define SF         7     //Spreading factor
+#define CR         4     //Coding rate
+#define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
+#define UAV_ID     "u1"   //Iroha blockchain ID
+#define ACK_RATIO  8     // how many packets are sent before a ACK packet is expected
+#define PK_FREQ    800  // how long to wait between packets in milliseconds
+#define TIMEOUT    10000  // how long to wait for a ACK packet
+
 byte SendPacketCounter = 0;
 byte ReceivePacketCounter = 1;
 byte lastReceivePacketCounter = 0;
-long lastSendTime = 0;
-boolean send = false;
+long lastRecvTime = 0;
+bool WAITING_FOR_ACK = false;
 
 AESLib aesLib;
 
@@ -30,9 +32,9 @@ struct TelemetryData {
   uint8_t satellites;
   uint8_t consumption;
   uint8_t rssi;
-  int8_t pitch;
-  int8_t roll;
-  int8_t heading;
+  int16_t pitch;
+  int16_t roll;
+  int16_t heading;
   bool arm;
   bool sat_fix;
 };
@@ -47,7 +49,7 @@ String encrypt_impl(char * msg, byte iv[]) {
 
 String decrypt_impl(char * msg, byte iv[]) {
   int msgLen = strlen(msg);
-  char decrypted[msgLen] = {0}; // half may be enough
+  char decrypted[msgLen] = {0};
   aesLib.decrypt64(msg, msgLen, (byte*)decrypted, aes_key, sizeof(aes_key), iv);
   return String(decrypted);
 }
@@ -76,8 +78,9 @@ void setup() {
 }
 
 void sendPacket(TelemetryData telemetry) {
-  Serial.println("Sending Telemetry Packet!");
-  String json_data = " " + String(telemetry.latitude, 4) +
+  Serial.print("Sending Telemetry Packet No.");
+  Serial.println(SendPacketCounter);
+  String json_data = String(telemetry.latitude, 4) +
                    " " + String(telemetry.longitude, 4) +
                    " " + String(telemetry.vbatt) +
                    " " + String(telemetry.altitude) +
@@ -88,55 +91,57 @@ void sendPacket(TelemetryData telemetry) {
                    " " + String(telemetry.pitch) +
                    " " + String(telemetry.roll) +
                    " " + String(telemetry.heading) +
-                   " " + String(telemetry.arm ? 1 : 0) + String(telemetry.sat_fix ? 1 : 0);
-  Serial.print("Plaintext: ");
-  Serial.println(json_data);
+                   " " + String(telemetry.arm ? 1 : 0) + 
+                   String(telemetry.sat_fix ? 1 : 0) + 
+                   String(SendPacketCounter);
+  //Serial.print("Plaintext: ");
+  //Serial.println(json_data);
 
   aesLib.set_paddingmode(paddingMode::ZeroLength); 
 
   // Encrypt Data
   byte enc_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
   String encrypted = encrypt_impl((char*)json_data.c_str(), enc_iv);
-  // sprintf(ciphertext, "%s", encrypted.c_str());
-  Serial.print("Base64 encoded Ciphertext: ");
-  Serial.println(encrypted);
+  //Serial.print("Base64 encoded Ciphertext: ");
+  //Serial.println(encrypted);
 
   // Decrypt Data
   byte dec_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
   String decrypted = decrypt_impl((char*)encrypted.c_str(), dec_iv);
-  Serial.print("Base64-decoded Cleartext: ");
-  Serial.println(decrypted);
+  //Serial.print("Base64-decoded Cleartext: ");
+  //Serial.println(decrypted);
 
   LoRa.beginPacket();
-  LoRa.write(DEST_ADDRESS);
+  LoRa.write(DA);
   LoRa.print(UAV_ID);
   LoRa.print(encrypted);
   LoRa.endPacket();
 }
 
-void onReceive(int packetSize)
-{
-  if (packetSize == 0){
-    return;   
-  }        // if there's no packet, return
+void onReceive(int packetSize){
+  // if there's no packet, return
+  if (packetSize == 0){return;}
+  lastRecvTime = 0;
 
   Serial.println("Receiving Packet!");
-  while (LoRa.available()) {
-    Serial.println(LoRa.read());
-  }
+  adjustLoRaParams(LoRa.packetRssi());
+  Serial.println(LoRa.readString());
   ReceivePacketCounter++;
+  SendPacketCounter = 0;
+  WAITING_FOR_ACK = false;
   sendPacketACK();
 }
 
+//Not sure if I will keep this, good for testing
 void sendPacketACK() {
   Serial.println("Sending ACK Packet!");
   LoRa.beginPacket();
-  LoRa.write(DEST_ADDRESS);
-  LoRa.write(UAV_ID[0]);
-  LoRa.write(UAV_ID[1]);
+  LoRa.write(DA);
+  LoRa.print(UAV_ID);
   LoRa.endPacket();
 }
 
+// For testing, these are just fixed values
 TelemetryData getTelemetry(){
   TelemetryData telemetry;
   telemetry.latitude = 37.7749;
@@ -155,17 +160,49 @@ TelemetryData getTelemetry(){
   return telemetry;
 }
 
+void adjustLoRaParams(int rssi) {
+  Serial.print("RSSI: ");
+  Serial.print(rssi);
+  Serial.print(", Updating LoRa params: ");
+  if (rssi > -70) {
+    Serial.println("SF: 7, BW = 125");
+    LoRa.setSpreadingFactor(7);
+    LoRa.setSignalBandwidth(125000);
+  } else if (rssi > -80) {
+    Serial.println("SF: 9, BW = 125");
+    LoRa.setSpreadingFactor(9);
+    LoRa.setSignalBandwidth(125000);
+  } else if (rssi > -90) {
+    Serial.println("SF: 10, BW = 250");
+    LoRa.setSpreadingFactor(10);
+    LoRa.setSignalBandwidth(250000);
+  } else {
+    Serial.println("SF: 12, BW = 250");
+    LoRa.setSpreadingFactor(12);
+    LoRa.setSignalBandwidth(250000);
+  }
+}
+
 
 void loop() {
-  if (!send)
+  if (SendPacketCounter < ACK_RATIO)
   {
-    sendPacket(getTelemetry());
     SendPacketCounter++;
-    lastSendTime = millis();
-    lastReceivePacketCounter = ReceivePacketCounter;
-    send = true;
+    sendPacket(getTelemetry());
+    delay(PK_FREQ);
+    lastRecvTime = millis();
   }
-  else{
+  else if (SendPacketCounter == ACK_RATIO && !WAITING_FOR_ACK){
+    Serial.println("Now waiting for ACK");
+    WAITING_FOR_ACK = true;
+    lastRecvTime = millis();
+  }
+  else if (WAITING_FOR_ACK && millis() - lastRecvTime > TIMEOUT){
+    Serial.println("ACK likely missed :(");
+    SendPacketCounter = 0;
+    WAITING_FOR_ACK = false;
+  }
+  else if(WAITING_FOR_ACK){
     onReceive(LoRa.parsePacket());
   }
 }
