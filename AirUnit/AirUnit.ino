@@ -3,20 +3,25 @@
 #include <AESLib.h>
 
 #define BAND       868E6 //Lora band frequency
-#define SF         7     //Spreading factor
-#define CR         4     //Coding rate
-#define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
 #define UAV_ID     "u1"   //Iroha blockchain ID
-#define ACK_RATIO  8     // how many packets are sent before a ACK packet is expected
+#define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
+#define ACK_RATIO  2     // how many packets are sent before a ACK packet is expected
 #define PK_FREQ    1000  // how long to wait between packets in milliseconds
 #define TIMEOUT    10000  // how long to wait for a ACK packet
 
-byte SendPacketCounter = 0;
-byte ReceivePacketCounter = 1;
-byte lastReceivePacketCounter = 0;
+#define SF         10     //Spreading factor
+#define CR         4     //Coding rate
+
+int SendPacketCounter = 0;
 long lastRecvTime = 0;  // The last time a packet was recived to check when ack has been missed
 long trackSendTime = 0; // Used to measure how long a packet took to make + send and adjust the delay between packets accordingly
 bool WAITING_FOR_ACK = false;
+
+// Variables used soley for the display
+byte currentSF = SF;
+int last_RSSI = 0;
+int totalSendPacketCounter = 0;
+int recPacketCounter = 0;
 
 AESLib aesLib;
 
@@ -62,6 +67,7 @@ void setup() {
   LoRa.setCodingRate4(CR);
   LoRa.setPreambleLength(8);
   LoRa.setFrequency(867500000);
+  LoRa.setSignalBandwidth(125E3);
   LoRa.enableCrc();
 
   // Setup serial communication
@@ -79,8 +85,8 @@ void setup() {
 }
 
 void sendPacket(TelemetryData telemetry) {
-  Serial.print("Sending Telemetry Packet No.");
-  Serial.println(SendPacketCounter);
+  Serial.print("[PK->] No.");
+  Serial.print(SendPacketCounter);
   String json_data = String(telemetry.latitude, 4) +
                    " " + String(telemetry.longitude, 4) +
                    " " + String(telemetry.vbatt) +
@@ -95,22 +101,12 @@ void sendPacket(TelemetryData telemetry) {
                    " " + String(telemetry.arm ? 1 : 0) + 
                    String(telemetry.sat_fix ? 1 : 0) + 
                    String(SendPacketCounter);
-  //Serial.print("Plaintext: ");
-  //Serial.println(json_data);
 
   aesLib.set_paddingmode(paddingMode::ZeroLength); 
 
   // Encrypt Data
   byte enc_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
   String encrypted = encrypt_impl((char*)json_data.c_str(), enc_iv);
-  //Serial.print("Base64 encoded Ciphertext: ");
-  //Serial.println(encrypted);
-
-  // // Decrypt Data
-  // byte dec_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
-  // String decrypted = decrypt_impl((char*)encrypted.c_str(), dec_iv);
-  // //Serial.print("Base64-decoded Cleartext: ");
-  // //Serial.println(decrypted);
 
   LoRa.beginPacket();
   LoRa.write(DA);
@@ -122,26 +118,29 @@ void sendPacket(TelemetryData telemetry) {
 void onReceive(int packetSize){
   // if there's no packet, return
   if (packetSize == 0){return;}
-  
+  recPacketCounter++;
 
-  Serial.println("Receiving Packet!");
-  adjustLoRaParams(LoRa.packetRssi());
+  Serial.print("[<-PK] : ");
   Serial.println(LoRa.readString());
   
   Serial.print("Waited for ");
   Serial.print(millis() - lastRecvTime);
-  Serial.println(" milliseconds");
+  Serial.println(" ms");
 
-  ReceivePacketCounter++;
   SendPacketCounter = 0;
-  lastRecvTime = 0;
   WAITING_FOR_ACK = false;
+  last_RSSI = LoRa.packetRssi();
+  adjustLoRaParams(LoRa.packetRssi());
   sendPacketACK();
+  //LoRa.sleep();
+  //delay(PK_FREQ - (millis() - lastRecvTime)*2);
+  //LoRa.idle();
+  lastRecvTime = 0;
 }
 
 //Not sure if I will keep this, good for testing
 void sendPacketACK() {
-  Serial.println("Sending ACK Packet!");
+  Serial.println("[->PK] ACK");
   LoRa.beginPacket();
   LoRa.write(DA);
   LoRa.print(UAV_ID);
@@ -171,35 +170,43 @@ void adjustLoRaParams(int rssi) {
   Serial.print("RSSI: ");
   Serial.print(rssi);
   Serial.print(", Updating LoRa params: ");
-  if (rssi > -70) {
-    Serial.println("SF: 7, BW = 125");
-    LoRa.setSpreadingFactor(7);
-    LoRa.setSignalBandwidth(125E3);
-  } else if (rssi > -80) {
-    Serial.println("SF: 9, BW = 125");
-    LoRa.setSpreadingFactor(9);
-    LoRa.setSignalBandwidth(125E3);
-  } else if (rssi > -90) {
-    Serial.println("SF: 10, BW = 250");
-    LoRa.setSpreadingFactor(10);
-    LoRa.setSignalBandwidth(250E3);
-  } else {
-    Serial.println("SF: 12, BW = 250");
-    LoRa.setSpreadingFactor(12);
-    LoRa.setSignalBandwidth(250E3);
+  if(-130 > rssi){
+    currentSF++;
   }
+  else if(-60 < rssi){
+    currentSF--;
+  }
+
+  if(currentSF > 12){
+    currentSF = 12;
+  }
+  else if (currentSF < 7){
+    currentSF = 7;
+  }
+
+  LoRa.setSpreadingFactor(currentSF);
 }
 
-
 void loop() {
+  LoRa.setSpreadingFactor(currentSF);
   if (SendPacketCounter < ACK_RATIO)
   {
     trackSendTime = millis();
     SendPacketCounter++;
+    totalSendPacketCounter++;
     sendPacket(getTelemetry());
-    Serial.println(PK_FREQ - (millis() - trackSendTime));
-    if (SendPacketCounter != 8){
+    Serial.print(" took: ");
+    Serial.print(PK_FREQ - (PK_FREQ - (millis() - trackSendTime)));
+    Serial.println("ms");
+
+    if (SendPacketCounter != ACK_RATIO && ((millis() - trackSendTime) < PK_FREQ)){
+      Serial.println("Sleeping unitl next cycle");
+      LoRa.sleep();
       delay(PK_FREQ - (millis() - trackSendTime));
+      LoRa.idle();
+    }
+    else{
+      Serial.println("");
     }
     trackSendTime = 0;
   }
@@ -212,8 +219,25 @@ void loop() {
     Serial.println("ACK likely missed :(");
     SendPacketCounter = 0;
     WAITING_FOR_ACK = false;
+    currentSF++;
+    if(currentSF > 12){
+      currentSF = 12;
+    }
   }
   else if(WAITING_FOR_ACK){
     onReceive(LoRa.parsePacket());
   }
+
+  Heltec.display->clear();
+  Heltec.display->drawString(0, 0, "LongLink-Air Unit");
+  Heltec.display->drawString(0, 12, "Sent: " + String(totalSendPacketCounter));
+  Heltec.display->drawString(64, 12, "Recv: " + String(recPacketCounter) + "(" + String(totalSendPacketCounter/ACK_RATIO) + ")");
+
+  // Display LoRa parameters
+  Heltec.display->drawString(0, 24, "SF: " + String(currentSF));
+  Heltec.display->drawString(0, 36, "CR: " + String(CR));
+  Heltec.display->drawString(64, 48, "RSSI: " + String(last_RSSI));
+  Heltec.display->drawString(0, 48, "Battery: " + String(analogRead(1)));
+
+  Heltec.display->display();
 }
