@@ -5,12 +5,16 @@
 #define BAND       868E6 //Lora band frequency
 #define UAV_ID     "u1"   //Iroha blockchain ID
 #define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
-#define ACK_RATIO  2     // how many packets are sent before a ACK packet is expected
-#define PK_FREQ    1000  // how long to wait between packets in milliseconds
+#define ACK_RATIO  8     // how many packets are sent before a ACK packet is expected
+#define PK_FREQ    10000  // how long to wait between packets in milliseconds
 #define TIMEOUT    10000  // how long to wait for a ACK packet
-
-#define SF         10     //Spreading factor
+#define SF_MAX     10
+#define SF_MIN     7
+#define SF         7     //Spreading factor
 #define CR         4     //Coding rate
+#define MIN_RSSI   -130
+#define MAX_RSSI   -60
+#define ACK_NUM    7
 
 int SendPacketCounter = 0;
 long lastRecvTime = 0;  // The last time a packet was recived to check when ack has been missed
@@ -85,8 +89,6 @@ void setup() {
 }
 
 void sendPacket(TelemetryData telemetry) {
-  Serial.print("[PK->] No.");
-  Serial.print(SendPacketCounter);
   String json_data = String(telemetry.latitude, 4) +
                    " " + String(telemetry.longitude, 4) +
                    " " + String(telemetry.vbatt) +
@@ -131,19 +133,24 @@ void onReceive(int packetSize){
   WAITING_FOR_ACK = false;
   last_RSSI = LoRa.packetRssi();
   adjustLoRaParams(LoRa.packetRssi());
-  sendPacketACK();
+  sendPacketACK(last_RSSI);
   //LoRa.sleep();
   //delay(PK_FREQ - (millis() - lastRecvTime)*2);
   //LoRa.idle();
   lastRecvTime = 0;
 }
 
-//Not sure if I will keep this, good for testing
-void sendPacketACK() {
+void sendPacketACK(int RSSI) {
   Serial.println("[->PK] ACK");
   LoRa.beginPacket();
   LoRa.write(DA);
   LoRa.print(UAV_ID);
+  LoRa.print(" ");
+  LoRa.print(ACK_NUM);
+  LoRa.print(" ");
+  LoRa.print(ACK_RATIO);
+  LoRa.print(" ");
+  LoRa.print(RSSI);
   LoRa.endPacket();
 }
 
@@ -167,24 +174,21 @@ TelemetryData getTelemetry(){
 }
 
 void adjustLoRaParams(int rssi) {
-  Serial.print("RSSI: ");
-  Serial.print(rssi);
-  Serial.print(", Updating LoRa params: ");
-  if(-130 > rssi){
-    currentSF++;
-  }
-  else if(-60 < rssi){
-    currentSF--;
-  }
+  //Keep track of what SF used to be to see if it needs changing
+  byte oldSF = currentSF;
 
-  if(currentSF > 12){
-    currentSF = 12;
-  }
-  else if (currentSF < 7){
-    currentSF = 7;
-  }
+  //Adjusting Spread Factor based on RSSI
+  if(MIN_RSSI > rssi) currentSF++;
+  else if(MAX_RSSI <= rssi) currentSF--;
 
-  LoRa.setSpreadingFactor(currentSF);
+  //Checking the SF hasn't gone out of range
+  if(currentSF >= SF_MAX) currentSF = SF_MAX;
+  else if (currentSF < SF_MIN) currentSF = SF_MIN;
+
+  if (oldSF != currentSF){
+    LoRa.setSpreadingFactor(currentSF);
+    Serial.print("RSSI: " + String(rssi) + ", Updating SF: " + String(currentSF));
+  }
 }
 
 void loop() {
@@ -195,20 +199,16 @@ void loop() {
     SendPacketCounter++;
     totalSendPacketCounter++;
     sendPacket(getTelemetry());
-    Serial.print(" took: ");
-    Serial.print(PK_FREQ - (PK_FREQ - (millis() - trackSendTime)));
-    Serial.println("ms");
+    trackSendTime = millis() - trackSendTime;
+    Serial.print("[PK->] No." + String(SendPacketCounter));
+    Serial.println(" took: " + String(trackSendTime) + "ms");
 
-    if (SendPacketCounter != ACK_RATIO && ((millis() - trackSendTime) < PK_FREQ)){
-      Serial.println("Sleeping unitl next cycle");
+    if (SendPacketCounter != ACK_RATIO && trackSendTime < PK_FREQ){
+      Serial.println("Sleeping for " + String(PK_FREQ - trackSendTime));
       LoRa.sleep();
-      delay(PK_FREQ - (millis() - trackSendTime));
+      delay(PK_FREQ - trackSendTime);
       LoRa.idle();
     }
-    else{
-      Serial.println("");
-    }
-    trackSendTime = 0;
   }
   else if (SendPacketCounter == ACK_RATIO && !WAITING_FOR_ACK){
     Serial.println("Now waiting for ACK");
@@ -216,26 +216,23 @@ void loop() {
     lastRecvTime = millis();
   }
   else if (WAITING_FOR_ACK && millis() - lastRecvTime > TIMEOUT){
-    Serial.println("ACK likely missed :(");
+    Serial.println("ACK Timeout: " + String(millis() - lastRecvTime));
     SendPacketCounter = 0;
     WAITING_FOR_ACK = false;
     currentSF++;
-    if(currentSF > 12){
-      currentSF = 12;
-    }
+    if(currentSF > SF_MAX) currentSF = SF_MAX;
+    LoRa.setSpreadingFactor(currentSF);
   }
-  else if(WAITING_FOR_ACK){
-    onReceive(LoRa.parsePacket());
-  }
+  else if(WAITING_FOR_ACK) onReceive(LoRa.parsePacket());
 
   Heltec.display->clear();
   Heltec.display->drawString(0, 0, "LongLink-Air Unit");
   Heltec.display->drawString(0, 12, "Sent: " + String(totalSendPacketCounter));
-  Heltec.display->drawString(64, 12, "Recv: " + String(recPacketCounter) + "(" + String(totalSendPacketCounter/ACK_RATIO) + ")");
+  Heltec.display->drawString(0, 24, "Recv: " + String(recPacketCounter) + "(" + String(totalSendPacketCounter/ACK_RATIO) + ")");
 
   // Display LoRa parameters
-  Heltec.display->drawString(0, 24, "SF: " + String(currentSF));
-  Heltec.display->drawString(0, 36, "CR: " + String(CR));
+  Heltec.display->drawString(0, 36, "SF: " + String(currentSF));
+  Heltec.display->drawString(64, 36, "CR: " + String(CR));
   Heltec.display->drawString(64, 48, "RSSI: " + String(last_RSSI));
   Heltec.display->drawString(0, 48, "Battery: " + String(analogRead(1)));
 
