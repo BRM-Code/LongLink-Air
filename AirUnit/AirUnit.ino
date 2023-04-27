@@ -15,6 +15,7 @@
 #define MIN_RSSI   -130
 #define MAX_RSSI   -60
 #define ACK_NUM    7
+#define LBT_THRESHOLD -80
 
 int SendPacketCounter = 0;
 long lastRecvTime = 0;  // The last time a packet was recived to check when ack has been missed
@@ -203,6 +204,9 @@ void loop() {
   LoRa.setSpreadingFactor(currentSF);
   if (SendPacketCounter < ACK_RATIO)
   {
+    while (LoRa.packetRssi() > LBT_THRESHOLD){
+      Serial.println(String(LoRa.packetRssi()) + " " + String(LBT_THRESHOLD));
+    }
     trackSendTime = millis();
     SendPacketCounter++;
     totalSendPacketCounter++;
