@@ -6,8 +6,8 @@
 #define UAV_ID     "u1"   //Iroha blockchain ID
 #define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
 #define ACK_RATIO  8     // how many packets are sent before a ACK packet is expected
-#define PK_FREQ    10000  // how long to wait between packets in milliseconds
-#define TIMEOUT    10000  // how long to wait for a ACK packet
+#define PK_FREQ    1000  // how long to wait between packets in milliseconds
+#define TIMEOUT    1000  // how long to wait for a ACK packet
 #define SF_MAX     10
 #define SF_MIN     7
 #define SF         7     //Spreading factor
@@ -73,6 +73,7 @@ void setup() {
   LoRa.setFrequency(867500000);
   LoRa.setSignalBandwidth(125E3);
   LoRa.enableCrc();
+  LoRa.setSyncWord(0x12);
 
   // Setup serial communication
   Serial.begin(115200);
@@ -134,9 +135,9 @@ void onReceive(int packetSize){
   last_RSSI = LoRa.packetRssi();
   adjustLoRaParams(LoRa.packetRssi());
   sendPacketACK(last_RSSI);
-  //LoRa.sleep();
-  //delay(PK_FREQ - (millis() - lastRecvTime)*2);
-  //LoRa.idle();
+  LoRa.sleep();
+  delay(PK_FREQ - (millis() - lastRecvTime)*2);
+  LoRa.idle();
   lastRecvTime = 0;
 }
 
@@ -191,6 +192,13 @@ void adjustLoRaParams(int rssi) {
   }
 }
 
+void packetSleep(){
+  Serial.println("Sleeping for " + String(PK_FREQ - trackSendTime));
+    LoRa.sleep();
+    delay(PK_FREQ - trackSendTime);
+    LoRa.idle();
+}
+
 void loop() {
   LoRa.setSpreadingFactor(currentSF);
   if (SendPacketCounter < ACK_RATIO)
@@ -204,10 +212,7 @@ void loop() {
     Serial.println(" took: " + String(trackSendTime) + "ms");
 
     if (SendPacketCounter != ACK_RATIO && trackSendTime < PK_FREQ){
-      Serial.println("Sleeping for " + String(PK_FREQ - trackSendTime));
-      LoRa.sleep();
-      delay(PK_FREQ - trackSendTime);
-      LoRa.idle();
+      packetSleep();
     }
   }
   else if (SendPacketCounter == ACK_RATIO && !WAITING_FOR_ACK){
