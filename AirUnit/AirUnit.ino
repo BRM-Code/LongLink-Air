@@ -1,10 +1,7 @@
 #include "heltec.h"
-#include <Crypto.h>
-#include <AESLib.h>
 
 #define BAND       868E6 //Lora band frequency
 #define UAV_ID     "u1"   //Iroha blockchain ID
-#define DA         0x0016c001ff15eb23 // Set the destination address for the packet (the address of the ground station)
 #define ACK_RATIO  8     // how many packets are sent before a ACK packet is expected
 #define PK_FREQ    1000  // how long to wait between packets in milliseconds
 #define TIMEOUT    1000  // how long to wait for a ACK packet
@@ -21,18 +18,12 @@ int SendPacketCounter = 0;
 long lastRecvTime = 0;  // The last time a packet was recived to check when ack has been missed
 long trackSendTime = 0; // Used to measure how long a packet took to make + send and adjust the delay between packets accordingly
 bool WAITING_FOR_ACK = false;
+byte currentSF = SF; // Used to store the current spread factor
 
 // Variables used soley for the display
-byte currentSF = SF;
 int last_RSSI = 0;
 int totalSendPacketCounter = 0;
 int recPacketCounter = 0;
-
-AESLib aesLib;
-
-byte aes_key[] = { 0x2B, 0x7E, 0x15, 0x16, 0x28, 0xAE, 0xD2, 0xA6, 0xAB, 0xF7, 0x15, 0x88, 0x09, 0xCF, 0x4F, 0x3C };
-byte aes_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-
 
 struct TelemetryData {
   float latitude;
@@ -49,21 +40,6 @@ struct TelemetryData {
   bool arm;
   bool sat_fix;
 };
-
-
-String encrypt_impl(char * msg, byte iv[]) {
-  int msgLen = strlen(msg);
-  char encrypted[2 * msgLen] = {0};
-  aesLib.encrypt64((const byte*)msg, msgLen, encrypted, aes_key, sizeof(aes_key), iv);
-  return String(encrypted);
-}
-
-String decrypt_impl(char * msg, byte iv[]) {
-  int msgLen = strlen(msg);
-  char decrypted[msgLen] = {0};
-  aesLib.decrypt64(msg, msgLen, (byte*)decrypted, aes_key, sizeof(aes_key), iv);
-  return String(decrypted);
-}
 
 void setup() {
   // Setup LoRa module
@@ -90,32 +66,25 @@ void setup() {
   Heltec.display->display();
 }
 
+void convert_struct_to_bytes(struct TelemetryData *struct_ptr, uint8_t *bytes) {
+  int i;
+
+  for (i = 0; i < sizeof(struct TelemetryData); i++) {
+    bytes[i] = *(uint8_t *)(((char *)struct_ptr) + i);
+  }
+}
+
 void sendPacket(TelemetryData telemetry) {
-  String json_data = String(telemetry.latitude, 4) +
-                   " " + String(telemetry.longitude, 4) +
-                   " " + String(telemetry.vbatt) +
-                   " " + String(telemetry.altitude) +
-                   " " + String(telemetry.ground_speed) +
-                   " " + String(telemetry.satellites) +
-                   " " + String(telemetry.consumption) +
-                   " " + String(telemetry.rssi) +
-                   " " + String(telemetry.pitch) +
-                   " " + String(telemetry.roll) +
-                   " " + String(telemetry.heading) +
-                   " " + String(telemetry.arm ? 1 : 0) + 
-                   String(telemetry.sat_fix ? 1 : 0) + 
-                   String(SendPacketCounter);
-
-  aesLib.set_paddingmode(paddingMode::ZeroLength); 
-
-  // Encrypt Data
-  byte enc_iv[N_BLOCK] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // iv_block gets written to, provide own fresh copy...
-  String encrypted = encrypt_impl((char*)json_data.c_str(), enc_iv);
+  uint8_t bytes[sizeof(struct TelemetryData)];
+  convert_struct_to_bytes(&telemetry, bytes);
 
   LoRa.beginPacket();
-  LoRa.write(DA);
   LoRa.print(UAV_ID);
-  LoRa.print(encrypted);
+  
+  for (int i = 0; i < sizeof(struct TelemetryData); i++) {
+    LoRa.write(bytes[i]);
+  }
+
   LoRa.endPacket();
 }
 
@@ -145,7 +114,6 @@ void onReceive(int packetSize){
 void sendPacketACK(int RSSI) {
   Serial.println("[->PK] ACK");
   LoRa.beginPacket();
-  LoRa.write(DA);
   LoRa.print(UAV_ID);
   LoRa.print(" ");
   LoRa.print(ACK_NUM);
@@ -187,6 +155,7 @@ void adjustLoRaParams(int rssi) {
   if(currentSF >= SF_MAX) currentSF = SF_MAX;
   else if (currentSF < SF_MIN) currentSF = SF_MIN;
 
+  // If the spread factor needs to be changed, change it
   if (oldSF != currentSF){
     LoRa.setSpreadingFactor(currentSF);
     Serial.print("RSSI: " + String(rssi) + ", Updating SF: " + String(currentSF));
